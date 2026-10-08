@@ -65,3 +65,27 @@ and `opencode/`, and opens `backport/pr-<number>-to-dev`.
 
 Review and merge each generated PR. A conflicting patch fails without commenting
 on the source PR.
+
+## Branch policy
+
+**Branch check** permits generated `release/*` and exact
+`backport/pr-<number>-to-main` heads into main. Contributor and generated
+`backport/pr-<number>-to-dev` heads target dev. Direct main/dev crossings and
+reversed release branches fail.
+
+**Release validation** checks the exact PR head with trusted main tooling rather
+than executing tooling from the PR.
+
+## Branch protections
+
+The disabled [main](rulesets/main.json) and [dev](rulesets/dev.json) presets require
+**Branch check**, **Release validation**, all three **Test and build** checks, one
+approval, stale-review dismissal, latest-push approval, and merge commits. Required
+checks do not require the latest target-branch head.
+
+The disabled [integrity](rulesets/release-integrity.json) preset blocks deletion and
+non-fast-forward updates on main, dev, and release refs without bypass. Backport refs
+stay outside it so the stock workflow can force-push retries. The disabled
+[writer](rulesets/release-writer.json) preset reserves release and `backport/**` ref
+creation and updates; GitHub's **Maintain** repository role (`RepositoryRole` ID `2`)
+may bypass it for conflict-resolution pushes.
