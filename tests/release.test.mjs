@@ -9,9 +9,10 @@ import { fileURLToPath } from "node:url";
 import * as candidates from "../scripts/release/candidates.mjs";
 import {
   changelogEntry, changelogStateMarker, commitLog, latestRelease, readChangelog,
-  releaseHeading, releaseMarker, releaseNotes
+  releaseHeading, releaseMarker, releaseNotes, validateChangelog
 } from "../scripts/release/changelog.mjs";
 import { Repository } from "../scripts/release/git.mjs";
+import { authorizeRelease, publishCandidate, repositoryName, repositoryUrl } from "../scripts/release/github.mjs";
 import { onlyVersionChanges, updateVersion, versionSnapshot } from "../scripts/release/versions.mjs";
 import {
   fetchPublishedMain, fetchReleaseNotesRefs, fetchReleaseRefs, publicationPermissions
@@ -24,7 +25,13 @@ function commit(repo, message) {
   return repo.sha("HEAD");
 }
 
-function fixture(t, devVersion = "0.0.3") {
+function fixture(t, devVersion = "0.0.3", repository = "microsoft/aspire-skills") {
+  const previousRepository = process.env.GITHUB_REPOSITORY;
+  process.env.GITHUB_REPOSITORY = repository;
+  t.after(() => {
+    if (previousRepository === undefined) delete process.env.GITHUB_REPOSITORY;
+    else process.env.GITHUB_REPOSITORY = previousRepository;
+  });
   const root = mkdtempSync(join(tmpdir(), "release-smoke-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const initialized = childProcess.spawnSync("git", ["init", "--quiet", "--initial-branch=main", root], {
@@ -51,7 +58,7 @@ function fixture(t, devVersion = "0.0.3") {
   repo.run(["add", "--all"]);
   const historical = commit(repo, "Publish v0.0.3");
   put("CHANGELOG.md", [
-    "# Changelog", "", releaseHeading("0.0.3"), "",
+    "# Changelog", "", "## [v0.0.3](https://github.com/microsoft/aspire-skills/releases/tag/v0.0.3)", "",
     `<!-- aspire-skills-changelog-done from=${historical} to=${historical} base=0.0.3 -->`,
     "", "- Historical release.", ""
   ].join("\n"));
@@ -247,56 +254,208 @@ test("pending notes and ordinary main branches fail while reviewed releases and 
   }));
 });
 
-test("source publication tags the exact main merge once and refuses a different target", t => {
-  const { repo, options } = fixture(t);
+for (const repository of ["microsoft/aspire-skills", "ellahathaway/aspire-skills"]) {
+  test(`source publication targets ${repository}, tags its exact main merge once, and refuses a different target`, t => {
+    const { repo, options } = fixture(t, "0.0.3", repository);
+    const staged = candidates.stageRelease(repo, options);
+    const released = publish(repo, finalize(repo, staged.candidate));
+    const ref = "refs/tags/v0.0.4";
+    const url = `${repositoryUrl()}/releases/tag/v0.0.4`;
+    let remote = "";
+    let created = false;
+    mockGitHub(t, (args, settings) => {
+      if (args[0] === "api") {
+        assert.equal(args[1], `repos/${repository}/releases?per_page=100`);
+        return { status: 0, stderr: "", stdout: JSON.stringify(created ? [[{ tag_name: "v0.0.4", draft: false }]] : [[]]) };
+      }
+      assert.deepEqual(args, [
+        "release", "create", "v0.0.4", "--repo", repository,
+        "--verify-tag", "--target", released, "--title", "v0.0.4", "--notes-file", "-"
+      ]);
+      assert.match(settings.input, /Improve the Aspire skills release/);
+      assert.doesNotMatch(settings.input, /aspire-skills-(?:release|changelog)/);
+      created = true;
+      return { status: 0, stderr: "", stdout: `${url}\n` };
+    });
+    const run = repo.run.bind(repo);
+    let pushes = 0;
+    let tags = 0;
+    t.mock.method(repo, "run", (args, settings) => {
+      if (args[0] === "remote") return `${repositoryUrl()}.git\n`;
+      if (args[0] === "ls-remote") return remote;
+      if (args.includes("push")) {
+        assert.deepEqual(args.slice(-3), ["push", "origin", ref]);
+        assert.ok(args.includes("push.followTags=false"));
+        pushes++;
+        remote = `${repo.run(["rev-parse", ref]).trim()}\t${ref}\n${repo.sha(ref)}\t${ref}^{}\n`;
+        return "";
+      }
+      if (args[0] === "tag") {
+        assert.deepEqual(args, [
+          "tag", "--annotate", "--no-sign", "--message", "Aspire skills v0.0.4", "v0.0.4", released
+        ]);
+        tags++;
+      }
+      return run(args, settings);
+    });
+    assert.equal(candidates.publishRelease(repo, released).url, url);
+    candidates.publishRelease(repo, released);
+    assert.equal(repo.sha(ref), released);
+    assert.equal(pushes, 1);
+    assert.equal(tags, 1);
+    remote = `${"a".repeat(40)}\t${ref}\n`;
+    assert.throws(() => candidates.publishRelease(repo, released), /must not be rewritten/);
+    assert.equal(pushes, 1);
+    assert.equal(tags, 1);
+  });
+
+  test(`release PR creation, reuse, and changelog labels stay in ${repository}`, async t => {
+    const { repo, options } = fixture(t, "0.0.3", repository);
+    const staged = candidates.stageRelease(repo, options);
+    const result = { ...staged, summary: candidates.summary(repo, staged) };
+    const number = 42;
+    const pr = {
+      number, state: "open", draft: true, body: "Previous description",
+      base: { ref: "main", repo: { full_name: repository } },
+      head: { ref: result.branch, sha: result.candidate, repo: { full_name: repository } },
+      labels: []
+    };
+    let existing = false;
+    let closed = false;
+    let pushed = 0;
+    let created = 0;
+    let updated = 0;
+    let labeled = 0;
+    let unlabeled = 0;
+    mockGitHub(t, (args, settings) => {
+      let stdout = "";
+      if (args[0] === "api" && args[1] === `repos/${repository}/pulls?state=open&base=main&per_page=100`) {
+        stdout = JSON.stringify([existing && !closed ? [pr] : []]);
+      } else if (args[1] === `repos/${repository}/pulls?state=closed&head=${repository.split("/")[0]}:${encodeURIComponent(result.branch)}&per_page=100`) {
+        stdout = JSON.stringify([[{ ...pr, state: "closed" }]]);
+      } else if (args[0] === "pr") {
+        assert.deepEqual(args, [
+          "pr", "create", "--repo", repository, "--draft", "--base", "main",
+          "--head", result.branch, "--title", "Release v0.0.4", "--body-file", artifacts(repo)[1]
+        ]);
+        created++;
+        stdout = `${repositoryUrl()}/pull/${number}\n`;
+      } else if (args[0] === "label") {
+        assert.deepEqual(args.slice(0, 5), ["label", "create", "aspire-skills-release", "--repo", repository]);
+      } else if (args[1] === `repos/${repository}/pulls/${number}`) {
+        stdout = JSON.stringify(pr);
+      } else if (args[2] === "PATCH") {
+        assert.equal(args[3], `repos/${repository}/pulls/${number}`);
+        assert.deepEqual(JSON.parse(settings.input), { body: result.summary });
+        updated++;
+      } else if (args[2] === "DELETE") {
+        assert.equal(args[3], `repos/${repository}/issues/${number}/labels/aspire-skills-release`);
+        unlabeled++;
+      } else if (args[2] === "POST") {
+        assert.equal(args[3], `repos/${repository}/issues/${number}/labels`);
+        assert.deepEqual(JSON.parse(settings.input), { labels: ["aspire-skills-release"] });
+        labeled++;
+        stdout = JSON.stringify([{ name: "aspire-skills-release" }]);
+      } else {
+        assert.fail(`Unexpected GitHub request: ${args.join(" ")}`);
+      }
+      return { status: 0, stderr: "", stdout };
+    });
+    const run = repo.run.bind(repo);
+    t.mock.method(repo, "run", (args, settings) => {
+      if (args[0] === "remote") return `${repositoryUrl()}\n`;
+      if (args[0] === "ls-remote") {
+        return existing ? `${result.candidate}\trefs/heads/${result.branch}\n` : "";
+      }
+      if (args.includes("push")) {
+        assert.deepEqual(args.slice(-3), ["push", "origin", `${result.candidateRef}:refs/heads/${result.branch}`]);
+        assert.ok(args.includes("push.followTags=false"));
+        pushed++;
+        return "";
+      }
+      return run(args, settings);
+    });
+    await publishCandidate(repo, result, artifacts(repo)[1]);
+    existing = true;
+    pr.labels.push({ name: "aspire-skills-release" });
+    await publishCandidate(repo, { ...result, previous: result.candidate }, artifacts(repo)[1]);
+    closed = true;
+    await assert.rejects(() => publishCandidate(repo, { ...result, previous: result.candidate }, artifacts(repo)[1]), /closed PR/);
+    assert.deepEqual({ pushed, created, updated, labeled, unlabeled }, { pushed: 1, created: 1, updated: 1, labeled: 2, unlabeled: 1 });
+  });
+}
+
+test("fork changelog generation preserves copied history and scopes new notes to the fork", t => {
+  const { repo, base, options } = fixture(t, "0.0.3", "ellahathaway/aspire-skills");
+  const previous = readChangelog(repo, base);
+  const staged = candidates.stageRelease(repo, options);
+  const changelog = readChangelog(repo, staged.candidate);
+  const release = latestRelease(changelog);
+  assert.ok(changelog.endsWith(previous.slice(previous.indexOf("## "))));
+  assert.ok(release.entry.startsWith("## [v0.0.4](https://github.com/ellahathaway/aspire-skills/releases/tag/v0.0.4)"));
+  assert.ok(candidates.summary(repo, staged).includes(`https://github.com/ellahathaway/aspire-skills/commit/${staged.source}`));
+  assert.throws(() => validateChangelog(staged, changelog.replace(
+    "https://github.com/ellahathaway/aspire-skills/releases/tag/v0.0.4",
+    "https://github.com/microsoft/aspire-skills/releases/tag/v0.0.4"
+  )));
+  repo.run(["update-ref", "refs/remotes/origin/notes-pr", staged.candidate]);
+  const input = join(repo.root, "changelog-input.json");
+  candidates.prepareReleaseNotes(repo, { headBranch: staged.branch, headCommit: staged.candidate }, input);
+  const prepared = JSON.parse(readFileSync(input, "utf8"));
+  assert.equal(prepared.repository, "ellahathaway/aspire-skills");
+  assert.equal(prepared.heading, releaseHeading("0.0.4"));
+});
+
+test("repository mismatches reject PR and tag publication before any GitHub write", async t => {
+  const { repo, options } = fixture(t, "0.0.3", "ellahathaway/aspire-skills");
   const staged = candidates.stageRelease(repo, options);
   const released = publish(repo, finalize(repo, staged.candidate));
-  const ref = "refs/tags/v0.0.4";
-  const url = "https://github.com/microsoft/aspire-skills/releases/tag/v0.0.4";
-  let remote = "";
-  let created = false;
-  mockGitHub(t, (args, settings) => {
-    if (args[0] === "api") {
-      return { status: 0, stderr: "", stdout: JSON.stringify(created ? [[{ tag_name: "v0.0.4", draft: false }]] : [[]]) };
-    }
-    assert.deepEqual(args, [
-      "release", "create", "v0.0.4", "--repo", "microsoft/aspire-skills",
-      "--verify-tag", "--target", released, "--title", "v0.0.4", "--notes-file", "-"
-    ]);
-    assert.match(settings.input, /Improve the Aspire skills release/);
-    assert.doesNotMatch(settings.input, /aspire-skills-(?:release|changelog)/);
-    created = true;
-    return { status: 0, stderr: "", stdout: `${url}\n` };
-  });
   const run = repo.run.bind(repo);
-  let pushes = 0;
-  let tags = 0;
+  let origins;
+  mockGitHub(t, args => assert.fail(`Cross-repository GitHub request: ${args.join(" ")}`));
   t.mock.method(repo, "run", (args, settings) => {
-    if (args[0] === "remote") return "https://github.com/microsoft/aspire-skills\n";
-    if (args[0] === "ls-remote") return remote;
-    if (args.includes("push")) {
-      assert.deepEqual(args.slice(-3), ["push", "origin", ref]);
-      pushes++;
-      remote = `${repo.run(["rev-parse", ref]).trim()}\t${ref}\n${repo.sha(ref)}\t${ref}^{}\n`;
-      return "";
-    }
-    if (args[0] === "tag") {
-      assert.deepEqual(args, [
-        "tag", "--annotate", "--no-sign", "--message", "Aspire skills v0.0.4", "v0.0.4", released
-      ]);
-      tags++;
-    }
+    if (args[0] === "remote") return origins[args.includes("--push") ? 1 : 0];
+    assert.ok(!args.includes("push") && args[0] !== "tag");
     return run(args, settings);
   });
-  assert.equal(candidates.publishRelease(repo, released).url, url);
-  candidates.publishRelease(repo, released);
-  assert.equal(repo.sha(ref), released);
-  assert.equal(pushes, 1);
-  assert.equal(tags, 1);
-  remote = `${"a".repeat(40)}\t${ref}\n`;
-  assert.throws(() => candidates.publishRelease(repo, released), /must not be rewritten/);
-  assert.equal(pushes, 1);
-  assert.equal(tags, 1);
+  for (origins of [
+    ["https://github.com/microsoft/aspire-skills\n", "https://github.com/ellahathaway/aspire-skills\n"],
+    ["https://github.com/ellahathaway/aspire-skills\n", "https://github.com/microsoft/aspire-skills\n"],
+    ["https://github.com/ellahathaway/aspire-skills\n", "https://github.com/ellahathaway/aspire-skills\nhttps://github.com/microsoft/aspire-skills\n"]
+  ]) {
+    await assert.rejects(() => publishCandidate(repo, staged, artifacts(repo)[1]), /origin matching ellahathaway\/aspire-skills/);
+    assert.throws(() => candidates.publishRelease(repo, released), /origin matching ellahathaway\/aspire-skills/);
+    assert.equal(repo.hasRef("refs/tags/v0.0.4"), false);
+  }
+});
+
+test("release authorization checks the workflow repository and rejects invalid identities", t => {
+  fixture(t, "0.0.3", "ellahathaway/aspire-skills");
+  const before = [process.env.GITHUB_ACTOR, process.env.GITHUB_TRIGGERING_ACTOR];
+  process.env.GITHUB_ACTOR = "fork-maintainer";
+  process.env.GITHUB_TRIGGERING_ACTOR = "fork-maintainer";
+  t.after(() => {
+    for (const [index, key] of ["GITHUB_ACTOR", "GITHUB_TRIGGERING_ACTOR"].entries()) {
+      if (before[index] === undefined) delete process.env[key];
+      else process.env[key] = before[index];
+    }
+  });
+  let queries = 0;
+  let permission = "write";
+  mockGitHub(t, args => {
+    assert.deepEqual(args, ["api", "repos/ellahathaway/aspire-skills/collaborators/fork-maintainer/permission"]);
+    queries++;
+    return { status: 0, stderr: "", stdout: JSON.stringify({ permission }) };
+  });
+  authorizeRelease();
+  assert.equal(queries, 1);
+  permission = "read";
+  assert.throws(() => authorizeRelease(), /requires write, maintain, or admin/);
+  assert.equal(queries, 2);
+  for (const repository of ["", "microsoft/aspire-skills/extra", "owner/..", "owner/repo\n", "../aspire-skills"]) {
+    process.env.GITHUB_REPOSITORY = repository;
+    assert.throws(() => repositoryName(), /GITHUB_REPOSITORY/);
+  }
 });
 
 test("release workflow preparation fetches explicit refs and computes App permissions", t => {

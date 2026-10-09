@@ -57,7 +57,6 @@ jobs:
 
   backport:
     if: >-
-      contains(fromJSON('["dotnet", "microsoft"]'), github.repository_owner) &&
       ((github.event_name == 'issue_comment' &&
         github.event.issue.pull_request != '' &&
         contains(github.event.comment.body, '/backport to')) ||

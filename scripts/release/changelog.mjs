@@ -9,7 +9,7 @@ const notesPlaceholder = "_User-facing release notes are pending. The release-ch
 
 export function releaseHeading(version) {
   parseVersion(version);
-  return `## [v${version}](${repositoryUrl}/releases/tag/v${version})`;
+  return `## [v${version}](${repositoryUrl()}/releases/tag/v${version})`;
 }
 
 export function readChangelog(repo, sha) {
@@ -24,7 +24,7 @@ export function latestRelease(changelog, { optional = false } = {}) {
   const entry = start < 0 ? "" : changelog.slice(start, end < 0 ? undefined : start + 1 + end).trimEnd();
   const markers = entry.split(/\r?\n/).filter(line => line.includes("aspire-skills-release"));
   const marker = markers.length === 1 && markerPattern.exec(markers[0]);
-  const heading = /^## \[v([0-9A-Za-z.+-]+)\]\(https:\/\/github\.com\/microsoft\/aspire-skills\/releases\/tag\/v\1\)\r?$/m.exec(entry);
+  const heading = /^## \[v([0-9A-Za-z.+-]+)\]\(https:\/\/github\.com\/[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+\/releases\/tag\/v\1\)\r?$/m.exec(entry);
   const notesMarkers = entry.split(/\r?\n/).filter(line => line.trimStart().startsWith("<!-- aspire-skills-changelog"));
   const notes = notesMarkers.length === 1 && notesPattern.exec(notesMarkers[0]);
   if (!markers.length && !notesMarkers.length && optional) return undefined;
@@ -99,8 +99,9 @@ export function commitLog(context) {
 }
 
 export function releaseNotes(repo, context) {
+  const url = repositoryUrl();
   const notes = context.changes.map(change =>
-    `- ${escapeMarkdown(change.subject)} ([${change.sha.slice(0, 12)}](${repositoryUrl}/commit/${change.sha}))`);
+    `- ${escapeMarkdown(change.subject)} ([${change.sha.slice(0, 12)}](${url}/commit/${change.sha}))`);
   return `${notes.length ? notes.join("\n") : emptyNote(repo, context.base)}\n`;
 }
 
