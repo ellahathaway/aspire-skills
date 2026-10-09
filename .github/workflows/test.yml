@@ -117,6 +117,10 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Install trusted release dependencies
+        working-directory: tooling
+        run: npm ci --ignore-scripts
+
       - name: Fetch release branches
         shell: bash
         env:
