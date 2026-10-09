@@ -65,3 +65,47 @@ and `opencode/`, and opens `backport/pr-<number>-to-dev`.
 
 Review and merge each generated PR. A conflicting patch fails without commenting
 on the source PR.
+
+## Testing releases in a fork
+
+The same release, changelog, and backport workflows can run in a fork. Each run
+uses its `GITHUB_REPOSITORY`; publication rejects any fetch or push origin that
+points elsewhere. New changelog and PR links point to the fork, while copied
+published changelog history stays unchanged.
+
+Install a dedicated GitHub App on only the fork, with Contents, Pull requests,
+and Workflows write permissions. Add its Client ID as `ASPIRE_BOT_APP_ID` and
+its PEM private key as `ASPIRE_BOT_PRIVATE_KEY` in the fork's Actions secrets.
+Set the `ASPIRE_BOT_LOGIN` Actions variable to its slug without `[bot]`.
+
+Keep `main` and source-only `dev` initialized as described above and choose an
+unused version greater than `main`'s version. Dispatch Release from the fork's
+`main`. A dry run prepares and tests artifacts without publication. A full run
+opens the fork's release PR and triggers changelog generation. Review and merge
+that PR to create the fork's tag and GitHub release, then review and merge its
+automatic dev backport. These are real fork changes, not disposable previews;
+never move or delete a published version tag.
+
+## Branch policy
+
+**Branch check** permits generated `release/*` and exact
+`backport/pr-<number>-to-main` heads into main. Contributor and generated
+`backport/pr-<number>-to-dev` heads target dev. Direct main/dev crossings and
+reversed release branches fail.
+
+**Release validation** checks the exact PR head with trusted main tooling rather
+than executing tooling from the PR.
+
+## Branch protections
+
+The disabled [main](rulesets/main.json) and [dev](rulesets/dev.json) presets require
+**Branch check**, **Release validation**, all three **Test and build** checks, one
+approval, stale-review dismissal, latest-push approval, and merge commits. Required
+checks do not require the latest target-branch head.
+
+The disabled [integrity](rulesets/release-integrity.json) preset blocks deletion and
+non-fast-forward updates on main, dev, and release refs without bypass. Backport refs
+stay outside it so the stock workflow can force-push retries. The disabled
+[writer](rulesets/release-writer.json) preset reserves release and `backport/**` ref
+creation and updates; GitHub's **Maintain** repository role (`RepositoryRole` ID `2`)
+may bypass it for conflict-resolution pushes.

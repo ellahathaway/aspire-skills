@@ -7,7 +7,7 @@ import {
   releaseHeading, releaseMarker, releaseNotes, validateChangelog
 } from "./changelog.mjs";
 import { expectedCatalog, validateCatalog } from "./catalog.mjs";
-import { publishSourceRelease, repositoryUrl } from "./github.mjs";
+import { publishSourceRelease, repositoryName, repositoryUrl } from "./github.mjs";
 
 const generated = ["CHANGELOG.md", "opencode"];
 const candidateRef = "refs/heads/release/candidate";
@@ -337,6 +337,7 @@ export function prepareReleaseNotes(repo, options, inputPath) {
   const release = latestRelease(readChangelog(repo, head));
   if (!inputPath) throw new Error("RELEASE_NOTES_PATH is required.");
   writeFileSync(inputPath, `${JSON.stringify({
+    repository: repositoryName(),
     head, from: context.from, source: context.source, base: context.base,
     version: context.version, pending: release.notesState === "pending",
     catalogsIntroduced: repo.files(context.base, ["opencode"]).size === 0,
@@ -437,9 +438,10 @@ export function stageRelease(repo, options = {}) {
 }
 
 export function summary(repo, result) {
+  const url = repositoryUrl();
   const links = [
-    `Source: [\`${result.source.slice(0, 12)}\`](${repositoryUrl}/commit/${result.source})`,
-    `Main: [\`${result.base.slice(0, 12)}\`](${repositoryUrl}/commit/${result.base})`,
+    `Source: [\`${result.source.slice(0, 12)}\`](${url}/commit/${result.source})`,
+    `Main: [\`${result.base.slice(0, 12)}\`](${url}/commit/${result.base})`,
     `Release version: \`${result.version}\``
   ];
   const release = latestRelease(readChangelog(repo, result.candidate));
@@ -458,7 +460,7 @@ export function summary(repo, result) {
     `- [ ] After publication, confirm \`v${result.version}\` points to the merge commit and the GitHub release matches the approved changelog entry.`,
     `- [ ] Review and merge the automatic backport into \`dev\`. Check that it carries version \`${result.version}\` and excludes \`CHANGELOG.md\` and \`opencode/\`.`
   ].join("\n");
-  return `${links.join(" | ")}\n\nCommit range: [\`${result.from.slice(0, 12)}\`](${repositoryUrl}/commit/${result.from})..[\`${result.source.slice(0, 12)}\`](${repositoryUrl}/commit/${result.source})\n\nLater dev commits are excluded unless deliberately restaged. Resolve main conflicts on this branch.\n\n${checklist}\n\n${notes}\n`;
+  return `${links.join(" | ")}\n\nCommit range: [\`${result.from.slice(0, 12)}\`](${url}/commit/${result.from})..[\`${result.source.slice(0, 12)}\`](${url}/commit/${result.source})\n\nLater dev commits are excluded unless deliberately restaged. Resolve main conflicts on this branch.\n\n${checklist}\n\n${notes}\n`;
 }
 
 function artifactPaths(repo) {

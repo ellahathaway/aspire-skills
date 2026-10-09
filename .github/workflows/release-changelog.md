@@ -6,8 +6,8 @@ on:
     branches: [main]
     names: aspire-skills-release
   stale-check: false
-  bots: [aspire-repo-bot]
-if: github.repository == 'microsoft/aspire-skills' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.event.pull_request.head.ref, 'release/')
+  bots: ["${{ vars.ASPIRE_BOT_LOGIN || 'aspire-repo-bot' }}"]
+if: github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.event.pull_request.head.ref, 'release/')
 concurrency:
   group: release-changelog-${{ github.event.pull_request.number }}
   cancel-in-progress: false
@@ -27,7 +27,7 @@ tools:
     github-token: ${{ secrets.GITHUB_TOKEN }}
     toolsets: [repos, pull_requests, search]
     min-integrity: none
-    allowed-repos: [microsoft/aspire-skills]
+    allowed-repos: ["${{ github.repository }}"]
 safe-outputs:
   activation-comments: false
   report-failure-as-issue: false
@@ -52,8 +52,6 @@ safe-outputs:
     github-app:
       client-id: ${{ secrets.ASPIRE_BOT_APP_ID }}
       private-key: ${{ secrets.ASPIRE_BOT_PRIVATE_KEY }}
-      owner: microsoft
-      repositories: [aspire-skills]
 pre-agent-steps:
   - name: Checkout pinned main release tooling
     env:
@@ -96,6 +94,10 @@ has verified the canonical release PR, its exact head, selected source,
 versions, catalogs, and prior changelog history. It has materialized every
 eligible first-parent dev change between `from` and `source`, excluding
 version-only and generated-file bookkeeping.
+
+The supplied `repository` must be `${{ github.repository }}`. Inspect commits and
+link new release content only in that repository. A copied commit's PR number
+does not prove that the same PR exists in this repository.
 
 If the input is absent, malformed, or inconsistent with the checkout, fail
 with a clear diagnostic. Do not infer a replacement range from the PR body,

@@ -2,9 +2,20 @@ import { spawnSync } from "node:child_process";
 import timers from "node:timers/promises";
 import { fullSha } from "./git.mjs";
 
-const repository = "microsoft/aspire-skills";
-export const repositoryUrl = `https://github.com/${repository}`;
 export const releaseLabel = "aspire-skills-release";
+
+export function repositoryName() {
+  const repository = process.env.GITHUB_REPOSITORY ?? "microsoft/aspire-skills";
+  if (!/^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+$/.test(repository)
+    || [".", ".."].includes(repository.split("/")[1])) {
+    throw new Error("GITHUB_REPOSITORY must identify one GitHub repository as owner/name.");
+  }
+  return repository;
+}
+
+export function repositoryUrl(repository = repositoryName()) {
+  return `https://github.com/${repository}`;
+}
 
 function gh(args, input) {
   const result = spawnSync("gh", args, {
@@ -26,7 +37,7 @@ function api(path, { pages = false } = {}) {
   return response.flat();
 }
 
-function openPullRequests(base) {
+function openPullRequests(repository, base) {
   return api(`repos/${repository}/pulls?state=open&base=${base}&per_page=100`, { pages: true });
 }
 
@@ -42,6 +53,7 @@ function remoteHead(repo, branch) {
 }
 
 export function authorizeRelease() {
+  const repository = repositoryName();
   const actors = [process.env.GITHUB_ACTOR, process.env.GITHUB_TRIGGERING_ACTOR];
   if (actors.some(actor => !actor)) throw new Error("Both release actors must be present.");
   for (const actor of new Set(actors)) {
@@ -61,13 +73,13 @@ function positiveNumber(value, label) {
 }
 
 export async function publishCandidate(repo, result, summaryPath) {
-  requireCanonicalOrigin(repo);
+  const repository = requireRepositoryOrigin(repo);
   const existing = remoteHead(repo, result.branch);
   if (existing !== result.previous) {
     throw new Error("The publication branch changed. Rerun without overwriting it.");
   }
   const target = "main";
-  const open = openPullRequests(target);
+  const open = openPullRequests(repository, target);
   if (open.some(pr => pr.head?.ref?.startsWith("release/")
     && pr.head.repo?.full_name === repository && pr.head.ref !== result.branch)) {
     throw new Error("A different release cycle is already open.");
@@ -78,7 +90,7 @@ export async function publishCandidate(repo, result, summaryPath) {
   const pr = matches[0];
   if (existing && !pr) {
     const prior = api(
-      `repos/${repository}/pulls?state=closed&head=microsoft:${encodeURIComponent(result.branch)}&per_page=100`,
+      `repos/${repository}/pulls?state=closed&head=${repository.split("/")[0]}:${encodeURIComponent(result.branch)}&per_page=100`,
       { pages: true }
     ).filter(pr => pr.head?.ref === result.branch && pr.head?.repo?.full_name === repository);
     if (prior.length) throw new Error("The publication branch belongs to a closed PR. Resolve it explicitly before rerunning.");
@@ -89,6 +101,7 @@ export async function publishCandidate(repo, result, summaryPath) {
     repo.run([
       "-c", "credential.helper=",
       "-c", "credential.https://github.com.helper=!gh auth git-credential",
+      "-c", "push.followTags=false",
       "push", "origin", `${result.candidateRef}:refs/heads/${result.branch}`
     ]);
   }
@@ -105,26 +118,29 @@ export async function publishCandidate(repo, result, summaryPath) {
       "--head", result.branch, "--title", `Release v${result.version}`,
       "--body-file", summaryPath
     ]).trim();
-    const match = /^https:\/\/github\.com\/microsoft\/aspire-skills\/pull\/(\d+)$/.exec(url);
-    if (!match) throw new Error("GitHub did not return the created flow PR URL.");
-    number = Number(match[1]);
+    const prefix = `${repositoryUrl(repository)}/pull/`;
+    if (!url.startsWith(prefix)) throw new Error("GitHub did not return a PR in the selected repository.");
+    number = Number(positiveNumber(url.slice(prefix.length), "Created release PR number"));
   }
   if (result.notesState === "pending") {
-    await triggerReleaseChangelog(number, result);
+    await triggerReleaseChangelog(repository, number, result);
   }
 }
 
-function requireCanonicalOrigin(repo) {
+function requireRepositoryOrigin(repo) {
+  const repository = repositoryName();
+  const expected = repositoryUrl(repository).toLowerCase();
   for (const flags of [[], ["--push"]]) {
     const urls = repo.run(["remote", "get-url", ...flags, "--all", "origin"]).trim().split(/\r?\n/);
-    if (urls.length !== 1 || !/^https:\/\/github\.com\/microsoft\/aspire-skills(?:\.git)?$/i.test(urls[0])) {
-      throw new Error("Publication requires the canonical repository's HTTPS fetch and push origin.");
+    if (urls.length !== 1 || urls[0].replace(/\.git$/i, "").toLowerCase() !== expected) {
+      throw new Error(`Publication requires an HTTPS fetch and push origin matching ${repository}.`);
     }
   }
+  return repository;
 }
 
 export function publishSourceRelease(repo, result) {
-  requireCanonicalOrigin(repo);
+  const repository = requireRepositoryOrigin(repo);
   if (!process.env.GH_TOKEN) throw new Error("Source release publication requires a GitHub token.");
   const tag = `v${result.version}`;
   const ref = `refs/tags/${tag}`;
@@ -150,6 +166,7 @@ export function publishSourceRelease(repo, result) {
     }
     repo.run([
       "-c", "credential.helper=", "-c", "credential.https://github.com.helper=!gh auth git-credential",
+      "-c", "push.followTags=false",
       "push", "origin", ref
     ]);
   }
@@ -157,7 +174,7 @@ export function publishSourceRelease(repo, result) {
     .filter(release => release.tag_name === tag);
   if (releases.length > 1) throw new Error(`More than one GitHub release uses ${tag}.`);
   if (releases[0]?.draft) throw new Error(`${tag} already belongs to a draft GitHub release; publish it explicitly.`);
-  const url = `${repositoryUrl}/releases/tag/${tag}`;
+  const url = `${repositoryUrl(repository)}/releases/tag/${tag}`;
   if (!releases.length) {
     const notes = readReleaseNotes(repo, result);
     const created = gh([
@@ -176,7 +193,7 @@ function readReleaseNotes(repo, result) {
   return `${entry.split(/\r?\n/).slice(1).filter(line => !line.startsWith("<!-- aspire-skills-")).join("\n").trim()}\n`;
 }
 
-async function triggerReleaseChangelog(number, result) {
+async function triggerReleaseChangelog(repository, number, result) {
   positiveNumber(number, "Release PR number");
   let pr;
   for (let attempt = 0; attempt < 5; attempt++) {

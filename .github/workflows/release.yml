@@ -31,7 +31,7 @@ concurrency:
 jobs:
   stage:
     name: Prepare source release
-    if: github.repository == 'microsoft/aspire-skills' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     outputs:
       source: ${{ steps.build.outputs.source }}
@@ -160,7 +160,7 @@ jobs:
   publish:
     name: Open or update release PR into main
     needs: stage
-    if: github.repository == 'microsoft/aspire-skills' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && !inputs.dry_run
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && !inputs.dry_run
     runs-on: ubuntu-latest
     steps:
       - name: Checkout trusted main tooling on a clean runner
@@ -253,7 +253,6 @@ jobs:
   release:
     name: Tag main merge and publish source release
     if: >-
-      github.repository == 'microsoft/aspire-skills' &&
       github.event_name == 'pull_request' &&
       github.event.pull_request.merged == true &&
       github.event.pull_request.base.ref == 'main' &&
