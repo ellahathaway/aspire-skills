@@ -6,9 +6,17 @@ All notable changes to the aspire-skills plugin will be documented in this file.
 
 <!-- aspire-skills-release from=a83ca78b9d35b8238f9c4fdba72cb779defe2a90 to=df3358970b06fdb6de6ed404543db8a89b276123 main=419eef54052ac25ec319244d1b7a05c19950f5d2 -->
 
-<!-- aspire-skills-changelog from=a83ca78b9d35b8238f9c4fdba72cb779defe2a90 to=df3358970b06fdb6de6ed404543db8a89b276123 base=0.0.3 -->
+<!-- aspire-skills-changelog-done from=a83ca78b9d35b8238f9c4fdba72cb779defe2a90 to=df3358970b06fdb6de6ed404543db8a89b276123 base=0.0.3 -->
 
-_User-facing release notes are pending. The release-changelog workflow will generate them. If generation fails, write and review the notes before merging; do not copy the source commit list._
+### Features
+- Added generated OpenCode catalogs so Aspire skills can be installed from OpenCode.
+- Updated the Aspire CLI setup guidance (`aspire`, `aspire-init`, README) for Aspire 13.6: `aspire new` and `aspire init` agent setup preselects recommended repository-local skills, including `aspireify`, and no longer offers MCP configuration. Aspire MCP stays opt-in through `aspire agent init --mcp` (13.6+) or the interactive option in 13.5.
+
+### Fixes
+- Fixed dangling plugin mirror symlinks for `copilot-hooks.json` and `hooks/hooks.json` so the plugin's hook configuration is delivered correctly.
+
+### Changed
+- Retired the legacy `aspire-skills` and `aspire-extensions` tarball bundles and their publish workflow; releases now ship through the new release process and OpenCode catalogs.
 
 ## [v0.0.3](https://github.com/microsoft/aspire-skills/releases/tag/v0.0.3)
 
