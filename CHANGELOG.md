@@ -2,6 +2,24 @@
 
 All notable changes to the aspire-skills plugin will be documented in this file.
 
+## [0.0.4](https://github.com/ellahathaway/aspire-skills/releases/tag/v0.0.4)
+
+<!-- aspire-skills-changelog-done from=a83ca78b9d35b8238f9c4fdba72cb779defe2a90 to=db74334aca767517cd4b46f55fa254f41ab257b9 base=0.0.3 -->
+
+### Features
+- Added OpenCode V1 and V2 catalogs for all seven shipped skills, including their
+  reference files and content hashes for detecting updates.
+
+### Fixes
+- Clarified Aspire 13.6+ agent setup guidance: skills install separately from MCP,
+  missing MCP configuration after `aspire new` or `aspire init` is expected, and
+  explicit MCP setup uses standalone `aspire agent init --mcp`. Missing-skill
+  recovery preserves selected skills and locations without enabling MCP.
+- Removed dangling hook configuration links from the published plugin mirror.
+- Corrected Bash and PowerShell telemetry hooks to identify the Copilot app as
+  `copilot-app` when `AI_AGENT=github_copilot_app_agent`, rather than attributing
+  its events to Copilot CLI. Other clients and telemetry opt-out remain unchanged.
+
 ## [0.0.3](https://github.com/microsoft/aspire-skills/releases/tag/v0.0.3)
 
 <!-- aspire-skills-changelog-done from=842c4fb8d9ff5f89bf3e5f6f16739a728b5ba77e to=a83ca78b9d35b8238f9c4fdba72cb779defe2a90 base=0.0.2 -->
